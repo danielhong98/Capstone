@@ -1,0 +1,449 @@
+---
+title: "Code for Captstone"
+author: "Daniel Hong"
+date: "December 1, 2017"
+output: html_document
+---
+
+FAANG Stocks November 30 trailing twelve month (TTM) daily stock prices
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("quantmod")) {
+    install.packages("quantmod")
+    library(quantmod)
+}
+
+start <- as.Date("2016-12-01")
+end <- as.Date("2017-11-30")
+
+getSymbols("FB", src = "google", from = start, to = end)
+```
+
+```{r}
+class(FB)
+```
+
+```{r}
+autoplot.zoo(FB[, "FB.Close"], main = "Facebook")
+```
+
+```{r}
+candleChart(FB, up.col = "black", dn.col = "red", theme = "white")
+```
+
+```{r}
+getSymbols(c("AAPL", "AMZN", "NFLX", "GOOG"), src = "google", from = start, to = end)
+```
+
+```{r}
+stocks <- as.xts(data.frame(FB = FB[, "FB.Close"],AAPL = AAPL[, "AAPL.Close"], AMZN = AMZN[, "AMZN.Close"],NFLX = NFLX[, "NFLX.Close"], GOOG = GOOG[, "GOOG.Close"]))
+head(stocks)
+```
+
+```{r}
+plot(as.zoo(stocks), screens = 1, lty = 1:3, xlab = "Date", ylab = "Price")
+legend("right", c("FB", "AAPL", "AMZN", "NFLX", "GOOG"), lty = 1:3, cex = 0.5)
+```
+
+```{r}
+plot(as.zoo(stocks[, c("FB.Close","AAPL.Close", "AMZN.Close","NFLX.Close", "GOOG.Close")]), screens = 1, lty = 1:2, 
+    xlab = "Date", ylab = "Price")
+par(new = TRUE)
+plot(as.zoo(stocks[, "GOOG.Close"]), screens = 1, lty = 3, xaxt = "n", yaxt = "n", 
+    xlab = "", ylab = "")
+axis(4)
+mtext("Price", side = 4, line = 3)
+legend("topleft", c("FB (left)","AAPL (left)", "AMZN (left)", "NFLX (left)", "GOOG"), lty = 1:3, cex = 0.5)
+```
+
+```{r}
+if (!require("magrittr")) {
+    install.packages("magrittr")
+    library(magrittr)
+}
+```
+
+```{r}
+stock_return = apply(stocks, 1, function(x) {x / stocks[1,]}) %>% 
+                                    t %>% as.xts
+
+head(stock_return)
+```
+
+```{r}
+plot(as.zoo(stock_return), screens = 1, lty = 1:3, xlab = "Date", ylab = "Return")
+legend("topleft", c("FB","AAPL", "AMZN","NFLX", "GOOG"), lty = 1:3, cex = 0.5)
+```
+
+Facebook ARIMA
+```{r}
+library(quantmod)
+library(tseries)
+library(timeSeries)
+library(forecast)
+library(xts)
+
+start <- as.Date("1993-01-22")
+end <- as.Date("2017-11-30")
+
+getSymbols("SPY", src = "google", from = start, to = end)
+stock_prices = SPY[,4]
+
+stock = diff(log(stock_prices),lag=1)
+stock = stock[!is.na(stock)]
+
+# Plot log returns 
+autoplot.zoo(stock,type='l', main='Log Returns SPY')
+
+# Conduct ADF test on log returns series
+print(adf.test(stock))
+
+# Split the dataset in two parts - training and testing
+breakpoint = floor(nrow(stock)*(2.9/3))
+
+# Apply the ACF and PACF functions
+par(mfrow = c(1,1))
+acf.stock = acf(stock[c(1:breakpoint),], main='ACF Plot', lag.max=100)
+pacf.stock = pacf(stock[c(1:breakpoint),], main='PACF Plot', lag.max=100)
+
+# Initialzing an xts object for Actual log returns
+Actual_series = xts(0,as.Date("2017-01-27","%Y-%m-%d"))
+ 
+# Initialzing a dataframe for the forecasted return series
+forecasted_series = data.frame(Forecasted = numeric())
+
+for (b in breakpoint:(nrow(stock)-1)) {
+
+stock_train = stock[1:b, ]
+stock_test = stock[(b+1):nrow(stock), ]
+
+# Summary of the ARIMA model using the determined (p,d,q) parameters
+fit = arima(stock_train, order = c(2, 0, 2),include.mean=FALSE)
+summary(fit)
+
+# plotting a acf plot of the residuals
+acf(fit$residuals,main="Residuals plot")
+
+# Forecasting the log returns
+arima.forecast = forecast(fit, h = 1,level=99)
+summary(arima.forecast)
+
+# plotting the forecast
+par(mfrow=c(1,1))
+plot(arima.forecast, main = "ARIMA Forecast")
+
+# Creating a series of forecasted returns for the forecasted period
+forecasted_series = rbind(forecasted_series,arima.forecast$mean[1])
+colnames(forecasted_series) = c("Forecasted")
+
+# Creating a series of actual returns for the forecasted period
+Actual_return = stock[(b+1),]
+Actual_series = c(Actual_series,xts(Actual_return))
+rm(Actual_return)
+
+print(stock_prices[(b+1),])
+print(stock_prices[(b+2),])
+
+}
+
+# Adjust the length of the Actual return series
+Actual_series = Actual_series[-1]
+
+# Create a time series object of the forecasted series
+forecasted_series = xts(forecasted_series,index(Actual_series))
+
+# Create a plot of the two return series - Actual versus Forecasted
+plot(Actual_series,type='l',main='Actual Returns Vs Forecasted Returns')
+lines(forecasted_series,lwd=1.5,col='red')
+legend('bottomright',c("Actual","Forecasted"),lty=c(1,1),lwd=c(1.5,1.5),col=c('black','red'))
+
+# Create a table for the accuracy of the forecast
+comparsion = merge(Actual_series,forecasted_series)
+comparsion$Accuracy = sign(comparsion$Actual_series)==sign(comparsion$Forecasted)
+print(comparsion)
+
+# Compute the accuracy percentage metric
+Accuracy_percentage = sum(comparsion$Accuracy == 1)*100/length(comparsion$Accuracy)
+print(Accuracy_percentage)
+```
+
+
+SP500
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Get quantmod
+if (!require("quantmod")) {
+    install.packages("quantmod")
+    library(quantmod)
+}
+library(ggplot2)
+library(quantmod)
+start <- as.Date("2008-04-01")
+end <- as.Date("2017-11-30")
+
+getSymbols("SPY", src = "google", from = start, to = end)
+autoplot.zoo(SPY[, "SPY.Close"], main = "S&P 500 represented by SPY ETF")
+```
+
+Linear Regression
+```{r}
+
+fit <- lm(SP500 ~ GDP+Unemployment+DurableGoods+CapacityUtilization+BuildingPermits+CPI+PPI+ConsumerConfidence
+          +M2+Spread, data=data)
+summary(fit)
+coefficients(fit)
+confint(fit, level=0.95) # CIs for model parameters 
+fitted(fit) # predicted values
+residuals(fit) # residuals
+anova(fit) # anova table 
+vcov(fit) # covariance matrix for model parameters 
+influence(fit) # regression diagnostics
+
+layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page 
+plot(fit)
+```
+
+Relative importance of all variables
+```{r}
+# Calculate Relative Importance for Each Predictor
+library(relaimpo)
+calc.relimp(fit,type=c("lmg","last","first","pratt"),
+   rela=TRUE)
+
+# Bootstrap Measures of Relative Importance (1000 samples) 
+boot <- boot.relimp(fit, b = 1000, type = c("lmg", 
+  "last", "first", "pratt"), rank = TRUE, 
+  diff = TRUE, rela = TRUE)
+booteval.relimp(boot) # print result
+plot(booteval.relimp(boot,sort=TRUE)) # plot result
+```
+
+
+Review all the variables we are working with in order to better understand the data they are presenting us. We can see the mean, variation and other metrics within the following table for a quick detailed reference.
+```{r}
+library(corrgram)
+library(caret)
+library(psych)
+library(knitr)
+
+data<-read.table("C:/Users/danielhong/Documents/Data 698/Econ_Indicator_Regression.csv", header=TRUE, sep = ",")
+head(data)
+
+colSums(is.na(data))
+
+table.desc <- describe(data[,-1])
+table.prep <- as.matrix(table.desc)
+table.round <- round((table.prep), 2)
+kable(table.round)
+```
+
+Visualize each one of the factors, its easier to visually navigate through a large number of variables. We are interested to see how data is distributed for each one of the variables. Please refer to above table for more specific information.
+```{r}
+dataH <- data[2:ncol(data)] #removing factor var
+par(mfrow = c(3,5), cex = .5)
+for(i in colnames(dataH)){
+hist(dataH[,i], xlab = names(data[i]),
+  main = names(dataH[i]), col="grey", ylab="")
+}
+```
+
+Denisty Plot can help better understand these data and look for abnormalities
+```{r}
+par(mfrow = c(3,5), cex = .5)
+for (i in colnames(dataH)) {
+ smoothScatter(dataH[,i], main = names(dataH[i]), ylab = "", 
+   xlab = "", colramp = colorRampPalette(c("white", "red")))
+ }
+```
+
+Boxplots
+```{r}
+par(mfrow = c(3,5), cex = .5)
+for(i in colnames(dataH)){
+boxplot(dataH[,i], xlab = names(dataH[i]),
+  main = names(dataH[i]), col="grey", ylab="")
+}
+```
+
+Correlation
+```{r}
+library(corrplot)
+correlations <- cor(dataH)
+corrplot(correlations, order = "hclust", tl.cex = 0.55)
+```
+
+PLSR
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(mlbench)
+library(MASS)
+library(AppliedPredictiveModeling)
+library(lars)
+library(pls)
+library(elasticnet)
+library(rpart)
+library(e1071)
+set.seed(1234)
+plsFit = plsr(SP500 ~ ., data=data, validation="CV")
+pls.pred = predict(plsFit, data[1:5, ], ncomp=1:2)
+
+pls.pred
+
+validationplot(plsFit, val.type="RMSEP")
+validationplot(plsFit, val.type="R2")
+
+pls.RMSEP = RMSEP(plsFit, estimate="CV")
+plot(pls.RMSEP, main="RMSEP PLS PH", xlab="Components")
+min_comp = which.min(pls.RMSEP$val)
+points(min_comp, min(pls.RMSEP$val), pch=1, col="red", cex=1.5)
+
+min_comp
+
+plot(plsFit, ncomp=11, asp=1, line=TRUE)
+
+pls.pred2 = predict(plsFit, data, ncomp=11)
+summary(pls.pred2)
+```
+
+Data Mining in R text - Predictive Modeling Techniques
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(xts)
+data(GSPC, package="DMwR2")
+first(GSPC)
+last(GSPC)
+
+library(quantmod)
+GSPC <- getSymbols("^GSPC",auto.assign=FALSE)
+
+GSPC <- getSymbols("^GSPC",from="1970-01-02",to="2017-11-30",auto.assign=FALSE)
+
+T.ind <- function(quotes, tgt.margin = 0.025, n.days = 10) {
+    v <- apply(HLC(quotes), 1, mean)
+    v[1] <- Cl(quotes)[1]
+    
+    r <- matrix(NA, ncol = n.days, nrow = NROW(quotes))
+    for (x in 1:n.days) r[, x] <- Next(Delt(v, k = x), x)
+    
+    x <- apply(r, 1, function(x) sum(x[x > tgt.margin | x < -tgt.margin]))
+    
+    if (is.xts(quotes)) xts(x, time(quotes)) else x
+}
+
+candleChart(last(GSPC,'3 months'),theme='white', TA=NULL)
+avgPrice <- function(p) apply(HLC(p),1,mean)
+addAvgPrice <- newTA(FUN=avgPrice,col=1,legend='AvgPrice')
+addT.ind <- newTA(FUN=T.ind,col='red', legend='tgtRet')
+addAvgPrice(on=1) 
+addT.ind()
+```
+
+```{r}
+library(TTR)
+myATR        <- function(x) ATR(HLC(x))[,'atr']
+mySMI        <- function(x) SMI(HLC(x))[, "SMI"]
+myADX        <- function(x) ADX(HLC(x))[,'ADX']
+myAroon      <- function(x) aroon(cbind(Hi(x),Lo(x)))$oscillator
+myBB         <- function(x) BBands(HLC(x))[, "pctB"]
+myChaikinVol <- function(x) Delt(chaikinVolatility(cbind(Hi(x),Lo(x))))[, 1]
+myCLV        <- function(x) EMA(CLV(HLC(x)))[, 1]
+myEMV        <- function(x) EMV(cbind(Hi(x),Lo(x)),Vo(x))[,2]
+myMACD       <- function(x) MACD(Cl(x))[,2]
+myMFI        <- function(x) MFI(HLC(x),  Vo(x))
+mySAR        <- function(x) SAR(cbind(Hi(x),Cl(x))) [,1]
+myVolat      <- function(x) volatility(OHLC(x),calc="garman")[,1]
+
+library(randomForest)
+data.model <- specifyModel(T.ind(GSPC) ~ Delt(Cl(GSPC),k=1:10) + 
+        myATR(GSPC) + mySMI(GSPC) + myADX(GSPC) + myAroon(GSPC) + 
+        myBB(GSPC)  + myChaikinVol(GSPC) + myCLV(GSPC) + 
+        CMO(Cl(GSPC)) + EMA(Delt(Cl(GSPC))) + myEMV(GSPC) + 
+        myVolat(GSPC)  + myMACD(GSPC) + myMFI(GSPC) + RSI(Cl(GSPC)) +
+        mySAR(GSPC) + runMean(Cl(GSPC)) + runSD(Cl(GSPC)))
+set.seed(1234)
+rf <- buildModel(data.model,method='randomForest',
+                 training.per=c("1995-01-01","2005-12-30"),
+                 ntree=1000, importance=TRUE)
+
+varImpPlot(rf@fitted.model, type = 1)
+```
+
+```{r}
+imp <- importance(rf@fitted.model, type = 1)
+rownames(imp)[which(imp > 30)]
+```
+
+```{r}
+data.model <- specifyModel(T.ind(GSPC) ~ myATR(GSPC) + mySMI(GSPC) +  myADX(GSPC) + 
+                           myAroon(GSPC) + myEMV(GSPC) + myVolat(GSPC) + 
+                           myMACD(GSPC) + myMFI(GSPC) + mySAR(GSPC) + 
+                           runMean(Cl(GSPC)) + runSD(Cl(GSPC)))
+```
+
+```{r}
+library(DMwR2)
+## The regression task
+Tdata.train <- as.data.frame(modelData(data.model,
+                                data.window=c('1970-01-02','2005-12-30')))
+Tdata.eval <- na.omit(as.data.frame(modelData(data.model,
+                                data.window=c('2006-01-01','2016-01-25'))))
+Tform <- as.formula('T.ind.GSPC ~ .')
+## The classification task
+buy.thr <- 0.1
+sell.thr <- -0.1
+Tdata.trainC <- cbind(Signal=trading.signals(Tdata.train[["T.ind.GSPC"]],
+                                             buy.thr,sell.thr),
+                      Tdata.train[,-1])
+Tdata.evalC <-  cbind(Signal=trading.signals(Tdata.eval[["T.ind.GSPC"]],
+                                             buy.thr,sell.thr),
+                      Tdata.eval[,-1])
+TformC <- as.formula("Signal ~ .")
+
+set.seed(1234)
+library(nnet)
+## The first column is the target variable
+norm.data <- data.frame(T.ind.GSPC=Tdata.train[[1]],scale(Tdata.train[,-1]))
+nn <- nnet(Tform, norm.data[1:1000, ], size = 5, decay = 0.01, 
+           maxit = 1000, linout = TRUE, trace = FALSE)
+preds <- predict(nn, norm.data[1001:2000, ])
+
+sigs.nn <- trading.signals(preds,0.1,-0.1)
+true.sigs <- trading.signals(Tdata.train[1001:2000, "T.ind.GSPC"], 0.1, -0.1)
+sigs.PR(sigs.nn,true.sigs)
+
+set.seed(1234)
+library(nnet)
+norm.data <- data.frame(Signal=Tdata.trainC$Signal,scale(Tdata.trainC[,-1]))
+nn <- nnet(Signal ~ ., norm.data[1:1000, ], size = 10, decay = 0.01, 
+           maxit = 1000, trace = FALSE)
+preds <- predict(nn, norm.data[1001:2000, ], type = "class")
+
+sigs.PR(preds, norm.data[1001:2000, 1])
+
+set.seed(1234)
+library(e1071)
+sv <- svm(Tform, Tdata.train[1:1000, ], gamma = 0.001, cost = 100)
+s.preds <- predict(sv, Tdata.train[1001:2000, ])
+sigs.svm <- trading.signals(s.preds, 0.1, -0.1)
+true.sigs <- trading.signals(Tdata.train[1001:2000, "T.ind.GSPC"], 0.1, -0.1)
+sigs.PR(sigs.svm, true.sigs)
+
+library(kernlab)
+ksv <- ksvm(Signal ~ ., Tdata.trainC[1:1000, ], C = 10)
+ks.preds <- predict(ksv, Tdata.trainC[1001:2000, ])
+sigs.PR(ks.preds, Tdata.trainC[1001:2000, 1])
+
+library(earth)
+e <- earth(Tform, Tdata.train[1:1000, ])
+e.preds <- predict(e, Tdata.train[1001:2000, ])
+sigs.e <- trading.signals(e.preds, 0.1, -0.1)
+true.sigs <- trading.signals(Tdata.train[1001:2000, "T.ind.GSPC"],  0.1, -0.1)
+sigs.PR(sigs.e, true.sigs)
+
+summary(e)
+
+evimp(e, trim=FALSE)
+```
